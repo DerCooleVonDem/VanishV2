@@ -3,27 +3,66 @@ main: sqrrl\VanishV2\VanishV2
 api: 5.0.0
 extensions:
   Core: '>=8.0'
-version: "4.0.4"
+version: "5.0.0"
 author: sqrrl
-commands:
-  vanish:
-    description: "Enter vanish mode"
-    permission: "vanish.use"
-    aliases:
-    - v
+description: Advanced vanish plugin with multiple features
 permissions:
   vanish.use:
     description: "Permission to use the vanish command"
     default: op
+  
   vanish.use.other:
     description: "Permission to vanish other player"
     default: op
+  
   vanish.see:
-     description: "Permission to see vanished players"
-     default: op
+    description: "Permission to see vanished players"
+    default: op
+  
   vanish.silent:
     description: "Permission to silently join the server"
     default: op
+  
   vanish.attack:
-    description: "allows you to attack players while vanished"
+    description: "Allows you to attack players while vanished"
+    default: op
+  
+  vanish.list:
+    description: "Permission to list vanished players"
+    default: op
+  
+  vanish.stats:
+    description: "Permission to view vanish statistics"
+    default: op
+  
+  vanish.mode.default:
+    description: "Permission to use the default vanish mode"
+    default: op
+  
+  vanish.mode.staff:
+    description: "Permission to use the staff vanish mode"
+    default: op
+  
+  vanish.mode.spectator:
+    description: "Permission to use the spectator vanish mode"
+    default: op
+  
+  vanish.group.default:
+    description: "Permission to use the default vanish group"
+    default: op
+  
+  vanish.group.admin:
+    description: "Permission to use the admin vanish group"
+    default: op
+  
+  vanish.group.mod:
+    description: "Permission to use the mod vanish group"
+    default: op
+  
+  vanish.auto.admin:
+    description: "Permission to auto-vanish as admin"
+    default: op
+  
+  vanish.auto.mod:
+    description: "Permission to auto-vanish as mod"
     default: op

@@ -3,221 +3,249 @@
 namespace sqrrl\VanishV2;
 
 use MohamadRZ4\Placeholder\PlaceholderAPI;
-use pocketmine\entity\effect\VanillaEffects;
-use pocketmine\network\mcpe\protocol\PlayerListPacket;
-use pocketmine\network\mcpe\protocol\types\PlayerListEntry;
-use pocketmine\player\Player;
-use pocketmine\utils\TextFormat;
-use muqsit\invmenu\InvMenuHandler;
 use pocketmine\plugin\PluginBase;
-use pocketmine\command\Command;
-use pocketmine\command\CommandSender;
+use pocketmine\utils\TextFormat;
 use Ifera\ScoreHud\event\PlayerTagUpdateEvent;
 use Ifera\ScoreHud\scoreboard\ScoreTag;
-use pocketmine\utils\Config;
+use sqrrl\VanishV2\api\VanishAPI;
+use sqrrl\VanishV2\api\VanishExpansion;
+use sqrrl\VanishV2\command\VanishCommand;
+use sqrrl\VanishV2\command\VanishFormCommand;
+use sqrrl\VanishV2\command\VanishListCommand;
+use sqrrl\VanishV2\command\VanishStatsCommand;
+use sqrrl\VanishV2\event\BlockEventListener;
+use sqrrl\VanishV2\event\EntityEventListener;
+use sqrrl\VanishV2\event\PlayerEventListener;
+use sqrrl\VanishV2\event\ScoreHudEventListener;
+use sqrrl\VanishV2\event\ServerEventListener;
+use sqrrl\VanishV2\libs\muqsit\invmenu\InvMenuHandler;
+use sqrrl\VanishV2\manager\VanishManager;
+use sqrrl\VanishV2\provider\ConfigProvider;
+use sqrrl\VanishV2\provider\DataProvider;
+use sqrrl\VanishV2\task\VanishTask;
+use sqrrl\VanishV2\util\VanishNotification;
+use sqrrl\VanishV2\util\VanishStats;
 
-use function array_search;
-use function in_array;
-use function strtolower;
-
+/**
+ * Class VanishV2
+ * Main plugin class for the VanishV2 plugin
+ */
 class VanishV2 extends PluginBase {
+    /** @var string Plugin prefix for messages */
     public const PREFIX = TextFormat::BLUE . "VanishV2 " . TextFormat::DARK_GRAY . "» " . TextFormat::RESET;
-
+    
+    /** @var ConfigProvider */
+    private ConfigProvider $configProvider;
+    
+    /** @var DataProvider */
+    private DataProvider $dataProvider;
+    
+    /** @var VanishManager */
+    private VanishManager $vanishManager;
+    
+    /** @var VanishStats */
+    private VanishStats $vanishStats;
+    
+    /** @var VanishNotification */
+    private VanishNotification $vanishNotification;
+    
+    /** @var array Legacy static arrays for backward compatibility */
     public static array $vanish = [];
-
     public static array $online = [];
 
+    /**
+     * Called when the plugin is enabled
+     */
     protected function onEnable(): void {
-        $this->getScheduler()->scheduleRepeatingTask(new VanishV2Task($this), 20);
-        $this->getServer()->getPluginManager()->registerEvents(new EventListener($this), $this);
-        $this->initConfig();
-        if ($this->isEnabled()) {
-            $this->libsStuff();
-        }
-        if ($this->getServer()->getPluginManager()->getPlugin("PlaceholderAPI") !== null) {
-            PlaceholderAPI::getInstance()->registerExpansion(new VanishExpansion());
-        }
+        // Initialize providers
+        $this->configProvider = new ConfigProvider($this);
+        $this->dataProvider = new DataProvider($this, $this->configProvider);
+        
+        // Initialize utilities
+        $this->vanishStats = new VanishStats($this);
+        $this->vanishNotification = new VanishNotification($this, $this->configProvider);
+        
+        // Initialize manager
+        $this->vanishManager = new VanishManager($this, $this->configProvider, $this->dataProvider);
+        
+        // Initialize API
+        VanishAPI::init($this->vanishManager);
+        
+        // Register commands
+        $this->registerCommands();
+        
+        // Schedule the repeating task
+        $this->getScheduler()->scheduleRepeatingTask(new VanishTask($this->vanishManager, $this->configProvider), 20);
+        
+        // Register event listeners
+        $this->registerEventListeners();
+        
+        // Initialize libraries
+        $this->initLibraries();
+        
+        // Register PlaceholderAPI expansion if available
+        $this->registerPlaceholderExpansion();
+        
+        // Log startup message
+        $this->getLogger()->info(TextFormat::GREEN . "VanishV2 has been enabled!");
     }
 
+    /**
+     * Called when the plugin is disabled
+     */
     protected function onDisable(): void {
-        if (!$this->getConfig()->get("unvanish-after-restart")) {
-            $file = new Config($this->getDataFolder() . "vanished_players.txt", CONFIG::ENUM);
-            $players = implode("\n", self::$vanish);
-            $file->set($players);
-            $file->save();
-        }
+        // Save vanished players
+        $this->vanishManager->saveVanishedPlayers();
+        
+        // Log shutdown message
+        $this->getLogger()->info(TextFormat::RED . "VanishV2 has been disabled!");
     }
-
-    private function initConfig(){
-        @mkdir($this->getDataFolder());
-        $this->saveDefaultConfig();
-        if ($this->getConfig()->get("config-version") < 8 || $this->getConfig()->get("config-version") === null) {
-            $this->getLogger()->notice("Updating your config...");
-            rename($this->getDataFolder() . "config.yml", $this->getDataFolder() . "config.yml.old");
-            $this->saveDefaultConfig();
-            $this->getConfig()->reload();
-            $this->getLogger()->notice("Config updated!");
-        }
-        if (!$this->getConfig()->get("unvanish-after-restart")) {
-            $file = new Config($this->getDataFolder() . "vanished_players.txt", CONFIG::ENUM);
-            $players = $file->getAll(true);
-            foreach ($players as $player) {
-                self::$vanish[] = $player;
+    
+    /**
+     * Register all commands
+     */
+    private function registerCommands(): void {
+        $commandMap = $this->getServer()->getCommandMap();
+        
+        // Register main vanish command
+        $commandMap->register("vanishv2", new VanishCommand($this, $this->vanishManager, $this->configProvider));
+        
+        // Register form command
+        $commandMap->register("vanishv2", new VanishFormCommand($this, $this->vanishManager, $this->configProvider));
+        
+        // Register list command
+        $commandMap->register("vanishv2", new VanishListCommand($this, $this->vanishManager, $this->configProvider));
+        
+        // Register stats command
+        $commandMap->register("vanishv2", new VanishStatsCommand($this, $this->vanishManager, $this->configProvider));
+    }
+    
+    /**
+     * Register all event listeners
+     */
+    private function registerEventListeners(): void {
+        $pluginManager = $this->getServer()->getPluginManager();
+        
+        // Register player events
+        $pluginManager->registerEvents(new PlayerEventListener($this, $this->vanishManager, $this->configProvider), $this);
+        
+        // Register entity events
+        $pluginManager->registerEvents(new EntityEventListener($this, $this->vanishManager, $this->configProvider), $this);
+        
+        // Register block events
+        $pluginManager->registerEvents(new BlockEventListener($this, $this->vanishManager, $this->configProvider), $this);
+        
+        // Register server events
+        $pluginManager->registerEvents(new ServerEventListener($this, $this->vanishManager, $this->configProvider), $this);
+        
+        // Register ScoreHud events if available
+        $this->registerScoreHudListener();
+    }
+    
+    /**
+     * Register ScoreHud listener if available
+     */
+    private function registerScoreHudListener(): void {
+        if ($this->getServer()->getPluginManager()->getPlugin("ScoreHud")) {
+            if (version_compare($this->getServer()->getPluginManager()->getPlugin("ScoreHud")->getDescription()->getVersion(), "6.0.0", ">=")) {
+                $this->getServer()->getPluginManager()->registerEvents(
+                    new ScoreHudEventListener($this->vanishManager), 
+                    $this
+                );
             }
-            unlink($this->getDataFolder() . "vanished_players.txt");
+        }
+    }
+    
+    /**
+     * Register PlaceholderAPI expansion if available
+     */
+    private function registerPlaceholderExpansion(): void {
+        if ($this->getServer()->getPluginManager()->getPlugin("PlaceholderAPI") !== null) {
+            PlaceholderAPI::getInstance()->registerExpansion(new VanishExpansion($this->vanishManager));
         }
     }
 
-    private function libsStuff(){
+    /**
+     * Initialize required libraries
+     */
+    private function initLibraries(): void {
         if (class_exists(InvMenuHandler::class)) {
             if (!InvMenuHandler::isRegistered()) {
                 InvMenuHandler::register($this);
             }
-        }else{
-            $this->getLogger()->error("InvMenu virion not found download VanishV2 on poggit or download InvMenu with DEVirion (not recommended)");
+        } else {
+            $this->getLogger()->error("InvMenu virion not found. Download VanishV2 on Poggit or download InvMenu with DEVirion (not recommended)");
             $this->getServer()->getPluginManager()->disablePlugin($this);
         }
     }
 
-    public function onCommand(CommandSender $sender, Command $command, string $label, array $args): bool{
-        switch (strtolower($command->getName())) {
-            case "vanish":
-            case "v":
-                if (count($args) === 1) {
-                    if (!$sender->hasPermission("vanish.use.other")) {
-                        $sender->sendMessage(self::PREFIX . TextFormat::RED . "You do not have permission to vanish other players");
-                        return false;
-                    }
-                }
-
-                if (count($args) === 0) {
-                    if ($sender instanceof Player) {
-                        if (!in_array($sender->getName(), self::$vanish)) {
-                            $this->vanish($sender);
-                            $sender->sendMessage(self::PREFIX . $this->getConfig()->get("vanish-message"));
-                        }else{
-                            $this->unvanish($sender);
-                            $sender->sendMessage(self::PREFIX . $this->getConfig()->get("unvanish-message"));
-                        }
-                    }else{
-                        $sender->sendMessage(self::PREFIX . TextFormat::RED . "Use this command In-Game");
-                    }
-                }else{
-                    if (count($args) === 1) {
-                        $player = $this->getServer()->getPlayerByPrefix($args[0]);
-                        if ($player != null) {
-                            if (!in_array($player->getName(), self::$vanish)) {
-                                $this->vanish($player);
-                                $msg_sender = $this->getConfig()->get("vanish-other");
-                                $msg_other = $this->getConfig()->get("vanished-other");
-                            }else{
-                                $this->unvanish($player);
-                                $msg_sender = $this->getConfig()->get("unvanish-other");
-                                $msg_other = $this->getConfig()->get("unvanished-other");
-                            }
-                            $msg_other = str_replace("%other-name", $sender->getName(), $msg_other);
-                            $msg_sender = str_replace("%name", $player->getName(), $msg_sender);
-                            $sender->sendMessage(self::PREFIX . $msg_sender);
-                            $player->sendMessage(self::PREFIX . $msg_other);
-                        }else{
-                            $sender->sendMessage(self::PREFIX . TextFormat::RED . "Player not found");
-                        }
-                    }
-                }
+    /**
+     * Update the player count in ScoreHud
+     */
+    public function updateHudPlayerCount(): void {
+        if (!$this->getServer()->getPluginManager()->getPlugin("ScoreHud")) {
+            return;
         }
-        return true;
-    }
-
-    public function vanish(Player $player) {
-        self::$vanish[] = $player->getName();
-        unset(self::$online[array_search($player->getName(), self::$online, true)]);
-        $player->setNameTag(TextFormat::GOLD . "[V] " . TextFormat::RESET . $player->getNameTag());
-        $this->updateHudPlayerCount();
-        if ($this->getConfig()->get("enable-leave")) {
-            $msg = $this->getConfig()->get("FakeLeave-message");
-            $msg = str_replace("%name", $player->getName(), $msg);
-            $this->getServer()->broadcastMessage($msg);
-        }
-        if ($this->getConfig()->get("enable-fly")) {
-            if ($player->isSurvival()) {
-                $player->setFlying(true);
-                $player->setAllowFlight(true);
+        
+        foreach ($this->getServer()->getOnlinePlayers() as $player) {
+            if (!$player->isOnline()) {
+                continue;
             }
-        }
-        foreach ($this->getServer()->getOnlinePlayers() as $onlinePlayer) {
-            if ($onlinePlayer->hasPermission("vanish.see")) {
-                $msg = $this->getConfig()->get("vanish");
-                $msg = str_replace("%name", $player->getName(), $msg);
-                $onlinePlayer->sendMessage($msg);
+            
+            if (!$player->hasPermission("vanish.see")) {
+                $ev = new PlayerTagUpdateEvent($player, new ScoreTag("VanishV2.fake_count", 
+                    strval(count($this->vanishManager->getOnlinePlayers()))));
+            } else {
+                $ev = new PlayerTagUpdateEvent($player, new ScoreTag("VanishV2.fake_count", 
+                    strval(count($this->getServer()->getOnlinePlayers()))));
             }
+            
+            $ev->call();
         }
     }
-
-    public function unvanish(Player $player) {
-        unset(self::$vanish[array_search($player->getName(), self::$vanish)]);
-        self::$online[] = $player->getName();
-        $player->setNameTag(str_replace("[V] ", "", $player->getNameTag()));
-        $player->setSilent(false);
-        $player->getXpManager()->setCanAttractXpOrbs(true);
-        $this->updateHudPlayerCount();
-        foreach ($this->getServer()->getOnlinePlayers() as $onlinePlayer) {
-            $onlinePlayer->showPlayer($player);
-            if ($onlinePlayer->hasPermission("vanish.see")) {
-                $msg = $this->getConfig()->get("unvanish");
-                $msg = str_replace("%name", $player->getName(), $msg);
-                $onlinePlayer->sendMessage($msg);
-            }
-        }
-        foreach($this->getServer()->getOnlinePlayers() as $p) {
-            $networkSession = $p->getNetworkSession();
-            $networkSession->sendDataPacket(
-                PlayerListPacket::add([
-                    PlayerListEntry::createAdditionEntry(
-                        $player->getUniqueId(),
-                        $player->getId(),
-                        $player->getDisplayName(),
-                        $networkSession->getTypeConverter()->getSkinAdapter()->toSkinData($player->getSkin()),
-                        $player->getXuid()
-                )]));
-        }
-        if ($this->getConfig()->get("enable-fly")) {
-            if ($player->isSurvival()) {
-                $player->setFlying(false);
-                $player->setAllowFlight(false);
-            }
-        }
-        if ($this->getConfig()->get("night-vision")){
-            $player->getEffects()->remove(VanillaEffects::NIGHT_VISION());
-        }
-        if ($this->getConfig()->get("enable-join")) {
-            $msg = $this->getConfig()->get("FakeJoin-message");
-            $msg = str_replace("%name", $player->getName(), $msg);
-            $this->getServer()->broadcastMessage($msg);
-        }
+    
+    /**
+     * Get the VanishManager instance
+     * 
+     * @return VanishManager
+     */
+    public function getVanishManager(): VanishManager {
+        return $this->vanishManager;
     }
-
-    private function checkHudVersion(): bool {
-        if ($this->getServer()->getPluginManager()->getPlugin("ScoreHud")) {
-            if(version_compare($this->getServer()->getPluginManager()->getPlugin("ScoreHud")->getDescription()->getVersion(), "6.0.0", ">=")){
-                $this->getServer()->getPluginManager()->registerEvents(new TagResolveListener, $this);
-                return true;
-            }
-        }
-        return false;
+    
+    /**
+     * Get the ConfigProvider instance
+     * 
+     * @return ConfigProvider
+     */
+    public function getConfigProvider(): ConfigProvider {
+        return $this->configProvider;
     }
-
-    public function updateHudPlayerCount() {
-        if ($this->checkHudVersion()) {
-            foreach ($this->getServer()->getOnlinePlayers() as $player) {
-                if ($player->isOnline()) {
-                    if (!$player->hasPermission("vanish.see")) {
-                        $ev = new PlayerTagUpdateEvent($player, new ScoreTag("VanishV2.fake_count", strval(count(self::$online))));
-                    }else{
-                        $ev = new PlayerTagUpdateEvent($player, new ScoreTag("VanishV2.fake_count", strval(count($this->getServer()->getOnlinePlayers()))));
-                    }
-                    $ev->call();
-                }
-            }
-        }
+    
+    /**
+     * Get the DataProvider instance
+     * 
+     * @return DataProvider
+     */
+    public function getDataProvider(): DataProvider {
+        return $this->dataProvider;
+    }
+    
+    /**
+     * Get the VanishStats instance
+     * 
+     * @return VanishStats
+     */
+    public function getVanishStats(): VanishStats {
+        return $this->vanishStats;
+    }
+    
+    /**
+     * Get the VanishNotification instance
+     * 
+     * @return VanishNotification
+     */
+    public function getVanishNotification(): VanishNotification {
+        return $this->vanishNotification;
     }
 }
